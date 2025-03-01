@@ -3,21 +3,47 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PlaybackController demo app</title>
+    <title>PlaybackControls demo app</title>
     <style type="text/css">
     </style>
 </head>
 <body>
-    <h1>PlaybackController demo app</h1>
+    <h1>PlaybackControls demo app</h1>
+    <canvas id="demo" width="300" height="300"></canvas>
     <playback-controls></playback-controls>
 
     <script type="module">
         import { PlaybackControls } from "./dist/index.js";
 
-        PlaybackController.register();
+        PlaybackControls.register();
         const ctrl = document.querySelector("playback-controls");
 
-        ctrl.addEventListener("change", evt => console.log("State changed", evt.detail));
+        const canvas = document.querySelector("canvas#demo");
+        const ctx = canvas.getContext("2d");
+
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "darkblue";
+        ctx.beginPath();
+        ctx.moveTo(0,0);
+        let lastTarget = -1;
+        const callback = (fraction) => {
+            const target = Math.round(300 * fraction);
+            if (Math.abs(target - lastTarget) >= 1) {
+                if (target < lastTarget) {
+                    // 1. clear canvas
+                    ctx.clearRect(-10, -10, 320, 320);
+                    // 2. begin new path
+                    ctx.beginPath();
+                    ctx.moveTo(0,0);
+                }
+                ctx.lineTo(target, target);
+                ctx.stroke();
+                lastTarget = target;
+            }
+        };
+        ctrl.setAnimationListener(callback);
+
+        //ctrl.addEventListener("change", evt => console.log("State changed", evt.detail));
 
     </script>
 </body>
