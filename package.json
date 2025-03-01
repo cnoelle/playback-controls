@@ -1,0 +1,26 @@
+{
+  "name": "playback-controller",
+  "version": "1.0.0",
+  "description": "Webcomponent playback controller",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "del-cli dist && tsc"
+  },
+  "keywords": [
+    "playback",
+    "controller",
+    "webcomponent"
+  ],
+  "author": "cnoelle",
+  "license": "MIT",
+  "devDependencies": {
+    "del-cli": "^6.0.0",
+    "typescript": "^5.8.2"
+  }
+}
