@@ -1,13 +1,32 @@
 import { PlaybackState, PlaybackStateInfo, PlaybackStateMachine, PlaybackTransition } from "./state-machine.js";
 
 
-type MutablePlaybackStateInfo = {-readonly [K in keyof PlaybackStateInfo]: PlaybackStateInfo[K]};
+type TimeBasedState = {
+    millisElapsed?: number;
+    timer?: number;
+    durationMillis: number;
+}
+type MutablePlaybackStateInfo = {-readonly [K in keyof PlaybackStateInfo]: PlaybackStateInfo[K]}&
+        {time?: TimeBasedState;};
 
-export class PlaybackController extends HTMLElement implements PlaybackStateMachine {
+/**
+ * The state can be externally controlled, via the method move(fraction: number): void, or the
+ * state evolution can be timer based (requestAnimationFrame), calling an externally passed callback
+ * on every invocation.
+ */
+export class PlaybackControls extends HTMLElement implements PlaybackStateMachine {
 
-    static readonly #DEFAULT_TAG: string = "playback-controller";
+    static readonly #DEFAULT_TAG: string = "playback-controls";
+    static readonly #DEFAULT_ANIMATION_DURATION: number = 10_000;  // millis
     static #tag: string|undefined;
-    readonly #state: MutablePlaybackStateInfo = {state: PlaybackState.STOPPED, fraction: 0};
+    readonly #state: MutablePlaybackStateInfo = {
+        state: PlaybackState.STOPPED, 
+        fraction: 0,
+        isPlaying() {
+            return [PlaybackState.PLAYING, PlaybackState.PLAYING_BACKWARDS].indexOf(this.state) >= 0;
+        }
+
+    };
     readonly #play: HTMLElement;
     readonly #pause: HTMLElement;
     readonly #stop: HTMLElement;
@@ -16,8 +35,10 @@ export class PlaybackController extends HTMLElement implements PlaybackStateMach
     readonly #clickListener: (evt: Event) => void;
     readonly #progressListener: (evt: MouseEvent) => void;
 
+    #animationCallback: ((fraction: number) => void)|undefined;
+
     static get observedAttributes() {
-        return []; 
+        return ["animation-duration"]; 
     }
 
     /**
@@ -25,10 +46,10 @@ export class PlaybackController extends HTMLElement implements PlaybackStateMach
      * @param tag 
      */
     static register(tag?: string) {
-        tag = tag || PlaybackController.#DEFAULT_TAG;
-        if (tag !== PlaybackController.#tag) {
-            customElements.define(tag, PlaybackController);
-            PlaybackController.#tag = tag;
+        tag = tag || PlaybackControls.#DEFAULT_TAG;
+        if (tag !== PlaybackControls.#tag) {
+            customElements.define(tag, PlaybackControls);
+            PlaybackControls.#tag = tag;
         }
     }
 
@@ -36,7 +57,7 @@ export class PlaybackController extends HTMLElement implements PlaybackStateMach
      * Retrieve the registered tag type for this element type, or undefined if not registered yet.
      */
     static tag(): string|undefined {
-        return PlaybackController.#tag;
+        return PlaybackControls.#tag;
     }
 
     constructor() {
@@ -139,8 +160,8 @@ export class PlaybackController extends HTMLElement implements PlaybackStateMach
     }
 
     static #updateActivation(nowActive: Array<HTMLElement>, nowInactive: Array<HTMLElement>) {
-        nowActive.forEach(e => PlaybackController.#activate(e));
-        nowInactive.forEach(e => PlaybackController.#deactivate(e));
+        nowActive.forEach(e => PlaybackControls.#activate(e));
+        nowInactive.forEach(e => PlaybackControls.#deactivate(e));
     }
 
     static #deactivate(el: HTMLElement) {
@@ -151,23 +172,52 @@ export class PlaybackController extends HTMLElement implements PlaybackStateMach
         el.removeAttribute("disabled");
     }
 
+    get animationDuration(): number {
+        const anim1 = parseFloat(this.getAttribute("animation-duration")!);
+        return anim1 > 0 ? anim1 : PlaybackControls.#DEFAULT_ANIMATION_DURATION;
+    }
+
+    set animationDuration(durationMillis: number) {
+        if (durationMillis > 0)
+            this.setAttribute("animation-duration", durationMillis.toString());
+    } 
+
+    async attributeChangedCallback(name: string, oldValue: string|null, newValue: string|null) {
+        const attr: string = name.toLowerCase();
+        switch (attr) {
+        case "animation-duration":
+            const millis = parseFloat(newValue!);
+            if (millis > 0)
+                this.#setAnimationDuration(millis);
+            break;
+        }
+    }
+
     state(): PlaybackStateInfo {
         return {...this.#state};
     }
    
     start(backwards: boolean = false): void {
         const state = this.#state;
+        if (state.isPlaying() && backwards === (state.state === PlaybackState.PLAYING_BACKWARDS))
+            return; // unchanged
         if ((state.state === PlaybackState.FINISHED && !backwards) ||
                     (state.state === PlaybackState.STOPPED && backwards)) {
             return;  // transition not possible, already at the end
-        }
+        }       
         state.state = backwards ? PlaybackState.PLAYING_BACKWARDS : PlaybackState.PLAYING;
+        if (backwards && state.fraction === 0)
+            state.fraction = 1;
+        else if (!backwards && state.fraction === 1)
+            state.fraction = 0;
         this.#started(backwards);
+        if (state.time)
+            this.#startTimer();
     }
     #started(backwards: boolean) {
         const nowInactive = backwards ? this.#playBackward : this.#play;
         const nowActive = [backwards ? this.#play : this.#playBackward, this.#pause, this.#stop];
-        PlaybackController.#updateActivation(nowActive, [nowInactive]);
+        PlaybackControls.#updateActivation(nowActive, [nowInactive]);
     }
     stop(): void {
         this.#state.state = PlaybackState.STOPPED;
@@ -188,11 +238,14 @@ export class PlaybackController extends HTMLElement implements PlaybackStateMach
         }
         state.state = PlaybackState.PAUSED;
         this.#paused();
+        this.#cancelTimer();
     }
     #paused() {
-        PlaybackController.#updateActivation([this.#play, this.#playBackward, this.#stop], [this.#pause]);
+        PlaybackControls.#updateActivation([this.#play, this.#playBackward, this.#stop], [this.#pause]);
     }
-    move(fraction: number = 0): void {
+    move(fraction: number = 0, options?: {skipTimer?: boolean}): void {
+        if (!options?.skipTimer)
+            this.#cancelTimer();
         if (fraction < 0)
             fraction = 0;
         else if (fraction > 1)
@@ -206,19 +259,96 @@ export class PlaybackController extends HTMLElement implements PlaybackStateMach
                     || (fraction === 1 && state.state === PlaybackState.PLAYING)) {
             if (fraction === 0) {
                 state.state = PlaybackState.STOPPED;
-                PlaybackController.#updateActivation([this.#play, this.#playBackward], [this.#pause, this.#stop]);
+                PlaybackControls.#updateActivation([this.#play, this.#playBackward], [this.#pause, this.#stop]);
             } else {
                 state.state = fraction === 1 ? PlaybackState.FINISHED : PlaybackState.PAUSED;
-                PlaybackController.#updateActivation([this.#play, this.#playBackward, this.#stop], [this.#pause]);
+                PlaybackControls.#updateActivation([this.#play, this.#playBackward, this.#stop], [this.#pause]);
             }
         } else {  // playing
             const isBackwards = state.state === PlaybackState.PLAYING_BACKWARDS;
             const active = isBackwards ? this.#play : this.#playBackward;
             const inactive = isBackwards ? this.#playBackward : this.#play;
-            PlaybackController.#updateActivation([active, this.#stop, this.#pause], [inactive]);   
+            PlaybackControls.#updateActivation([active, this.#stop, this.#pause], [inactive]);   
         }
         this.#progress.value = fraction * 100;
+        if (state.time && !options?.skipTimer) {
+            const oneOff = !state.isPlaying();
+            this.#startTimer({oneOff: oneOff});
+        }
     }
+
+    setAnimationListener(listener: (fraction: number) => void|undefined): void {
+        if (this.#state.time) {
+            this.#cancelTimer();
+            delete this.#state.time;
+        }
+        this.#animationCallback = listener;
+        if (!listener)
+            return;
+        this.#state.time = {
+            durationMillis: this.animationDuration
+        };
+        if (this.#state.isPlaying())
+            this.#startTimer();
+    }
+
+    #setAnimationDuration(durationMillis: number) {
+        if (!(durationMillis! > 0))
+            return;
+        const wasPlaying = this.#state.isPlaying() && this.#state.time;
+        if (!wasPlaying)
+            return;
+        const wasBackward = wasPlaying && this.#state.state === PlaybackState.PLAYING_BACKWARDS;
+        this.pause();
+        this.#state.time!.durationMillis = durationMillis!;
+        this.start(wasBackward);
+    }
+
+    #startTimer(options?: {oneOff?: boolean;}) {
+        const state = this.#state;
+        const timeInfo: TimeBasedState|undefined = state.time;
+        if (!timeInfo)
+            return;
+        this.#cancelTimer();
+        if (!state.isPlaying() && !options?.oneOff)  // state must be set to playing prior to this call
+            return;
+        const initialFraction = state.fraction; // should be 0 for forward and 1 for backward mode
+        let start: number|undefined = undefined;
+        const run = (timestamp: number) => {
+            if (start === undefined)
+                start = timestamp;
+            const passed = timestamp - start;
+            timeInfo.millisElapsed = passed;
+            const backwards = state.state === PlaybackState.PLAYING_BACKWARDS;
+            const fraction = backwards ? Math.max(0, initialFraction - (passed / timeInfo.durationMillis)) : 
+                    Math.min(1, passed / timeInfo.durationMillis + initialFraction);
+            if (fraction === 1 && !backwards) {
+                this.finish();
+                return;
+            } else if (fraction === 0 && backwards) {
+                this.stop();
+                return;
+            }
+            this.move(fraction, {skipTimer: true});
+            this.#animationCallback!(fraction);
+            if (!options?.oneOff)
+                timeInfo.timer = globalThis.requestAnimationFrame(run);
+            else
+                delete timeInfo.timer;
+        };
+        timeInfo.millisElapsed = 0;
+        timeInfo.timer = globalThis.requestAnimationFrame(run);
+    }
+
+    #cancelTimer() {
+        const timer = this.#state.time?.timer;
+        if (timer === undefined)
+            return;
+        globalThis.cancelAnimationFrame(timer);
+        delete this.#state.time!.timer;
+        delete this.#state.time!.millisElapsed;
+    }
+
 
 
 }

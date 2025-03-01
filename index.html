@@ -9,13 +9,14 @@
 </head>
 <body>
     <h1>PlaybackController demo app</h1>
-    <playback-controller></playback-controller>
+    <playback-controls></playback-controls>
 
     <script type="module">
-        import { PlaybackController } from "./dist/index.js";
+        import { PlaybackControls } from "./dist/index.js";
 
         PlaybackController.register();
-        const ctrl = document.querySelector("playback-controller");
+        const ctrl = document.querySelector("playback-controls");
+
         ctrl.addEventListener("change", evt => console.log("State changed", evt.detail));
 
     </script>

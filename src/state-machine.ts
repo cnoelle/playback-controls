@@ -13,9 +13,10 @@ export interface PlaybackStateInfo {
      * State STOPPED must have fraction 0, state FINISHED must have fraction 1.
      */
     readonly fraction: number;
+
+    isPlaying(): boolean;
 }
 
-// TODO ?
 export interface PlaybackTransition {
     readonly from: PlaybackStateInfo;
     readonly to: PlaybackStateInfo;
@@ -24,13 +25,7 @@ export interface PlaybackTransition {
 export interface PlaybackStateMachine {
     state(): PlaybackStateInfo;
     start(backwards?: boolean): void;
-    /**
-     * Equivalent to reset(0);
-     */
     stop(): void;
-     /**
-     * Equivalent to reset(1);
-     */
     finish(): void;
     pause(): void;
     /**
@@ -45,4 +40,5 @@ export interface PlaybackStateMachine {
      */
     addEventListener(event: "start"|"startreverse"|"stop"|"jumpplaying"|"jumppaused"|"change", 
                 listener: (evt: CustomEvent<PlaybackTransition>) => void): void;
+    
 }

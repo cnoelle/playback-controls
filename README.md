@@ -1,6 +1,6 @@
 # playback-controller
 
-Webcomponent playback controller
+Generic playback controls for web animations.
 
 ## Development
 
