@@ -9,7 +9,7 @@
 </head>
 <body>
     <h1>PlaybackControls demo app</h1>
-    <canvas id="demo" width="300" height="300"></canvas>
+    <canvas id="demo" width="600" height="300"></canvas>
     <playback-controls></playback-controls>
 
     <script type="module">
@@ -18,32 +18,50 @@
         PlaybackControls.register();
         const ctrl = document.querySelector("playback-controls");
 
+        // draw an animated sine function
         const canvas = document.querySelector("canvas#demo");
         const ctx = canvas.getContext("2d");
-
+        const offset = 5;
+        const length = canvas.width - 2 * offset;
+        const height = canvas.height - 2 * offset;
+        const numPoints = 300;
+        const pointFractions = Array.from({ length: numPoints }, (_, idx) => idx/(numPoints-1)); // range: 0-1
+        const points = pointFractions.map(frac => frac * length); // range: 0-length
+        const factor = 4*Math.PI;
+        const halfHeight = height/2;
+        const y = x => Math.sin(factor * (x-offset) / length) * halfHeight + halfHeight + offset;
         ctx.lineWidth = 3;
         ctx.strokeStyle = "darkblue";
         ctx.beginPath();
-        ctx.moveTo(0,0);
-        let lastTarget = -1;
+        ctx.moveTo(offset, y(offset));
+        let lastPointIdx = undefined;
+        let lastDirection = true; // true: forward, false: backwards
+        // draw an animated function to a 2d canvas; fraction is a value between 0 and 1.
         const callback = (fraction) => {
-            const target = Math.round(300 * fraction);
-            if (Math.abs(target - lastTarget) >= 1) {
-                if (target < lastTarget) {
-                    // 1. clear canvas
-                    ctx.clearRect(-10, -10, 320, 320);
-                    // 2. begin new path
+            const pointIdx = Math.round(fraction * (numPoints-1));
+            if (pointIdx === lastPointIdx)
+                return;
+            if (pointIdx < lastPointIdx) {
+                const point = points[pointIdx] + offset;
+                ctx.clearRect(point + 1, 0, length + 2 * offset - point, height + 2 * offset);
+                lastDirection = false;
+            } else {
+                if (!lastDirection) {  // in this case it is required to redraw completely
+                    ctx.clearRect(0, 0, length + 2 * offset, height + 2 * offset);
                     ctx.beginPath();
-                    ctx.moveTo(0,0);
+                    ctx.moveTo(offset, y(offset));
+                    lastPointIdx = 0;
                 }
-                ctx.lineTo(target, target);
+                for (let idx=(lastPointIdx||0)+1; idx<=pointIdx; idx++) {
+                    const point = points[idx] + offset;
+                    ctx.lineTo(point, y(point));
+                }
                 ctx.stroke();
-                lastTarget = target;
+                lastDirection = true;
             }
+            lastPointIdx = pointIdx;
         };
         ctrl.setAnimationListener(callback);
-
-        //ctrl.addEventListener("change", evt => console.log("State changed", evt.detail));
 
     </script>
 </body>
