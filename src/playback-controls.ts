@@ -38,7 +38,7 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
     #animationCallback: ((fraction: number) => void)|undefined;
 
     static get observedAttributes() {
-        return ["animation-duration"]; 
+        return ["animation-duration", "no-titles"]; 
     }
 
     /**
@@ -66,10 +66,11 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         // TODO
         /*style.textContent = ":host { position: relative; display: block; }";*/
         style.textContent = ".ctrl-container { display: flex; column-gap: 1em; align-items: center; }\n" +
-            ".ctrl-btn { font-size: 2em; }\n" +
+            ".ctrl-btn { font-size: var(--playback-controls-font-size, 2em); " + 
+                "color: var(--playback-controls-color-active, black); }\n" +
             ".ctrl-btn:not([disabled]):hover { cursor: pointer; }\n" +
-            ".ctrl-btn[disabled] { color: gray; }\n " +
-            ".progress-indicator {margin-left: 1em; width: 8em;} ";
+            ".ctrl-btn[disabled] { color: var(--playback-controls-color-inactive, gray); }\n " +
+            ".progress-indicator {margin-left: 1em; width: var(--playback-controls-progress-width, 8em);}";
         const shadow: ShadowRoot = this.attachShadow({mode: "open"});
         shadow.appendChild(style);
         const controlsContainer = document.createElement("div");
@@ -83,10 +84,8 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         // https://en.wikipedia.org/wiki/Media_control_symbols
         //const ctrlText = ["&#x23F5;", "&#x23F8;", "&#x23F9;", "&#x23F4;"];
         const ctrlText = ["⏵", "⏴", "⏸", "⏹"];
-        const ctrlTitle = ["Play", "Play backwards", "Pause", "Stop"];
         ctrlButtons.forEach((el, idx) => {
             el.textContent = ctrlText[idx];
-            el.title = ctrlTitle[idx];
             el.classList.add("ctrl-btn");
             controlsContainer.appendChild(el);
         });
@@ -103,8 +102,19 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         this.#progress = progress;
         this.#clickListener = this.#clicked.bind(this);
         this.#progressListener = this.#progressChanged.bind(this);
+        this.#setTitles();
         controlsContainer.addEventListener("click", this.#clickListener);
         progress.addEventListener("click", this.#progressListener);
+    }
+
+    #setTitles() {
+        const ctrlTitle = ["Play", "Play backwards", "Pause", "Stop"];
+        [this.#play, this.#playBackward, this.#pause, this.#stop].forEach(
+                (btn, idx) => btn.title = ctrlTitle[idx]);
+    }
+
+    #removeTitles() {
+        [this.#play, this.#playBackward, this.#pause, this.#stop].forEach(btn => btn.removeAttribute("title"));
     }
 
     #clicked(event: Event) {
@@ -182,6 +192,17 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
             this.setAttribute("animation-duration", durationMillis.toString());
     } 
 
+    get noTitles(): boolean {
+        return this.getAttribute("no-titles") !== null;
+    }
+
+    set noTitles(noTitles: boolean) {
+        if (noTitles)
+            this.setAttribute("no-titles", "");
+        else
+            this.removeAttribute("no-titles");
+    }
+
     async attributeChangedCallback(name: string, oldValue: string|null, newValue: string|null) {
         const attr: string = name.toLowerCase();
         switch (attr) {
@@ -189,6 +210,12 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
             const millis = parseFloat(newValue!);
             if (millis > 0)
                 this.#setAnimationDuration(millis);
+            break;
+        case "no-titles":
+            if (newValue !== null)
+                this.#removeTitles();
+            else
+                this.#setTitles();
             break;
         }
     }

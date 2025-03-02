@@ -5,12 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PlaybackControls demo app</title>
     <style type="text/css">
+        playback-controls {
+            --playback-controls-font-size: 2em; /* Change the size of the control icons */
+             /* Change the color of the control icons */
+             /*
+            --playback-controls-color-active: darkblue;
+            --playback-controls-color-inactive: lightblue;
+            */
+        }
     </style>
 </head>
 <body>
     <h1>PlaybackControls demo app</h1>
     <canvas id="demo" width="600" height="300"></canvas>
-    <playback-controls></playback-controls>
+    <playback-controls animation-duration="10000"></playback-controls>
 
     <script type="module">
         import { PlaybackControls } from "./dist/index.js";

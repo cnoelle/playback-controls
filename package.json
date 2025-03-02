@@ -19,6 +19,14 @@
   ],
   "author": "cnoelle",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:cnoelle/playback-controls.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cnoelle/playback-controls/issues"
+  },
+  "homepage": "https://github.com/cnoelle/playback-controls#readme",
   "devDependencies": {
     "del-cli": "^6.0.0",
     "typescript": "^5.8.2"
