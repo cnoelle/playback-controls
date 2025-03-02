@@ -1,6 +1,20 @@
 # playback-controller
 
-Playback/media controls for web animations.
+A webcomponent that displays playback controls (or media controls) for web animations.
+
+<img src="https://raw.githubusercontent.com/cnoelle/playback-controls/refs/heads/main/screenshot.png" style="width: 168px;">
+
+## Contents
+
+* [Basic usage](#basic-usage)
+* [Configuration](#configuration)
+  * [Attributes and properties](#attributes-and-properties)
+  * [CSS variables](#css-variables)
+* [Implementation](#implementation)
+* [Development](#development)
+  * [Prerequisites](#prerequisites)
+  * [Build](#build)
+  * [Dev server](#dev-server)
 
 ## Basic usage
 

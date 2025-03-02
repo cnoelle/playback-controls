@@ -10,7 +10,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "del-cli dist && tsc"
+    "build": "del-cli dist && tsc",
+    "prepack": "npm run build"
   },
   "keywords": [
     "playback",
