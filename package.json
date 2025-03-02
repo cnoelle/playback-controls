@@ -1,6 +1,6 @@
 {
   "name": "playback-controls",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Webcomponent playback controls",
   "type": "module",
   "exports": {

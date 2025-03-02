@@ -18,6 +18,8 @@ A webcomponent that displays playback controls (or media controls) for web anima
 
 ## Basic usage
 
+Install: `npm install playback-controls`
+
 Html:
 
 ```html
