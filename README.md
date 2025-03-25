@@ -4,6 +4,8 @@ A webcomponent that displays playback controls (or media controls) for web anima
 
 <img src="https://raw.githubusercontent.com/cnoelle/playback-controls/refs/heads/main/screenshot.png" style="width: 168px;">
 
+Demo: https://cnoelle.github.io/playback-controls/
+
 ## Contents
 
 * [Basic usage](#basic-usage)
@@ -33,10 +35,10 @@ import { PlaybackControls } from "playback-controls";
 
 PlaybackControls.register();
 const ctrl = document.querySelector("playback-controls");
-ctrl.setAnimationListener((fraction) => {
+ctrl.setAnimationListener({move: (state) => {
     // TODO: show animation state at specified completion fraction
-    console.log("Fraction completed:", fraction);
-});
+    console.log("Fraction completed:", state.fraction);
+}});
 ```
 
 A complete example can be found in https://github.com/cnoelle/playback-controls/blob/main/index.html.

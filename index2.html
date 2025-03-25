@@ -13,18 +13,58 @@
             --playback-controls-color-inactive: lightblue;
             */
         }
+        .container {
+            position: relative;
+        }
+        .spinner {
+            display: inline-block;
+            position: absolute;
+            top: 100px;
+            left: 200px;
+            width: 80px;
+            height: 80px;
+            color: darkblue;
+            box-sizing: border-box;
+        }
+        .spinner:after {
+            content: " ";
+            display: block;
+            box-sizing: border-box;
+            width: 64px;
+            height: 64px;
+            margin: 8px;
+            border-radius: 50%;
+            border: 8px solid currentColor;
+            border-color: currentColor transparent currentColor transparent;
+            animation: spinner 1s linear infinite;
+        }
+        @keyframes spinner {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+        .hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
-    <h1>PlaybackControls demo app</h1>
-    <canvas id="demo" width="600" height="300"></canvas>
-    <playback-controls animation-duration="10000"></playback-controls>
+    <h1>PlaybackControls demo app with suspension</h1>
+    <div class="container">
+        <canvas id="demo" width="600" height="300"></canvas>
+        <playback-controls animation-duration="10000"></playback-controls>
+        <div id="spinner" class="spinner hidden"></div>
+    </div>
 
     <script type="module">
-        import { PlaybackControls } from "https://unpkg.com/playback-controls@latest/dist/index.js";
+        import { PlaybackControls } from "./dist/index.js";
 
         PlaybackControls.register();
         const ctrl = document.querySelector("playback-controls");
+        const spinner = document.querySelector("div#spinner");
 
         // draw an animated sine function
         const canvas = document.querySelector("canvas#demo");
@@ -43,13 +83,20 @@
         ctx.beginPath();
         ctx.moveTo(offset, y(offset));
         let lastPointIdx = undefined;
+        let lastFraction = -1;
+        let wasSuspended = false;
         let lastDirection = true; // true: forward, false: backwards
         // draw an animated function to a 2d canvas; fraction is a value between 0 and 1.
         const callback = (state) => {
+            spinner.classList.add("hidden");
             const fraction = state.fraction;
             const pointIdx = Math.round(fraction * (numPoints-1));
-            if (pointIdx === lastPointIdx)
+            const spinnerNeeded = !wasSuspended && ((fraction >= 0.25 && lastFraction < 0.25) || (fraction >= 0.5 && lastFraction < 0.5) || (fraction >= 0.75 && lastFraction < 0.75));
+            wasSuspended = false;
+            if (pointIdx === lastPointIdx && !spinnerNeeded) {
+                lastFraction = fraction;
                 return true;
+            }
             if (pointIdx < lastPointIdx) {
                 const point = points[pointIdx] + offset;
                 ctx.clearRect(point + 1, 0, length + 2 * offset - point, height + 2 * offset);
@@ -69,6 +116,15 @@
                 lastDirection = true;
             }
             lastPointIdx = pointIdx;
+            if (spinnerNeeded) {
+                lastFraction = fraction;
+                spinner.classList.remove("hidden");
+                wasSuspended = true;
+                return new Promise(resolve => setTimeout(() => {
+                    resolve(true);
+                }, 2000)); 
+            }
+            lastFraction = fraction;
             return true;
         };
         ctrl.setAnimationListener({move: callback});
