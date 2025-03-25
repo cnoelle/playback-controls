@@ -9,6 +9,29 @@ type TimeBasedState = {
 type MutablePlaybackStateInfo = {-readonly [K in keyof PlaybackStateInfo]: PlaybackStateInfo[K]}&
         {time?: TimeBasedState;};
 
+
+export interface AnimationListener {
+    /**
+     * Animation start requested. Return false to indicate that running the animation is currently not possible,
+     * or a Promise if this requires some task to be completed first, such as (pre-)loading a resource. 
+     * @param fraction the initial fraction, a value between 0 and 1
+     * @param backwards indicates if the animation is to run backwards
+     */
+    start?(fraction: number, backwards: boolean): boolean|Promise<boolean>;
+    /**
+     * Called before the animation progresses to the new state. This is expected to be called frequently when the animation is running. 
+     * Returning a promise will suspend the animation until the promise completes. If the promise fails, the animation is stopped. 
+     * Do not return a promise if the required data for the animation is already available, in particular do not use an async function here.  
+     * @param state 
+     */
+    move(state: PlaybackStateInfo): boolean|Promise<boolean>;
+    /**
+     * Animation stopped, either it is finished, or pause or stop has been triggered manually.
+     * @param state 
+     */
+    stopped?(state: PlaybackStateInfo): unknown;
+}
+
 /**
  * The state can be externally controlled, via the method move(fraction: number): void, or the
  * state evolution can be timer based (requestAnimationFrame), calling an externally passed callback
@@ -22,11 +45,13 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
     readonly #state: MutablePlaybackStateInfo = {
         state: PlaybackState.STOPPED, 
         fraction: 0,
+        isSuspended: false,
         isPlaying() {
             return [PlaybackState.PLAYING, PlaybackState.PLAYING_BACKWARDS].indexOf(this.state) >= 0;
         }
 
     };
+    #suspensionControl: AbortController|undefined;
     readonly #play: HTMLElement;
     readonly #pause: HTMLElement;
     readonly #stop: HTMLElement;
@@ -35,7 +60,7 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
     readonly #clickListener: (evt: Event) => void;
     readonly #progressListener: (evt: MouseEvent) => void;
 
-    #animationCallback: ((fraction: number) => void)|undefined;
+    #animationCallback: AnimationListener|undefined;
 
     static get observedAttributes() {
         return ["animation-duration", "no-titles"]; 
@@ -151,12 +176,7 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         const value: number = target.value;
         if (!isFinite(value) || value < 0 || value > 100)
             return;
-        const state = this.#state;
-        const previousState = {...state};
         this.move(value/100);
-        const type = [PlaybackState.PLAYING, PlaybackState.PLAYING_BACKWARDS].indexOf(state.state) >= 0 ?
-                    "jumpplaying" : "jumppaused";
-        this.#dispatchEvent(type, previousState);
     }
 
     #dispatchEvent(type: string, oldState: PlaybackStateInfo) {
@@ -225,13 +245,16 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
     }
    
     start(backwards: boolean = false): void {
+        if (!this.#animationCallback)
+            return;
         const state = this.#state;
         if (state.isPlaying() && backwards === (state.state === PlaybackState.PLAYING_BACKWARDS))
             return; // unchanged
         if ((state.state === PlaybackState.FINISHED && !backwards) ||
                     (state.state === PlaybackState.STOPPED && backwards)) {
             return;  // transition not possible, already at the end
-        }       
+        }
+        this.#cancelSuspension();
         state.state = backwards ? PlaybackState.PLAYING_BACKWARDS : PlaybackState.PLAYING;
         if (backwards && state.fraction === 0)
             state.fraction = 1;
@@ -247,15 +270,24 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         PlaybackControls.#updateActivation(nowActive, [nowInactive]);
     }
     stop(): void {
-        this.#state.state = PlaybackState.STOPPED;
-        this.move(0);
+        const state = this.#state;
+        state.state = PlaybackState.STOPPED;
+        this.#cancelSuspension();
+        this.#moveInternal(0);
+        if (this.#animationCallback?.stopped)
+            this.#animationCallback.stopped({...state});
     }
     finish(): void {
-        this.#state.state = PlaybackState.FINISHED;
-        this.move(1);
+        const state = this.#state;
+        state.state = PlaybackState.FINISHED;
+        this.#cancelSuspension();
+        this.#moveInternal(1);
+        if (this.#animationCallback?.stopped)
+            this.#animationCallback.stopped({...state});
     }
     pause(): void {
         const state = this.#state;
+        this.#cancelSuspension();
         if (state.fraction <= 0) {
             this.stop();
             return;
@@ -266,11 +298,55 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         state.state = PlaybackState.PAUSED;
         this.#paused();
         this.#cancelTimer();
+        if (this.#animationCallback?.stopped)
+            this.#animationCallback.stopped({...state});        
     }
     #paused() {
         PlaybackControls.#updateActivation([this.#play, this.#playBackward, this.#stop], [this.#pause]);
     }
-    move(fraction: number = 0, options?: {skipTimer?: boolean}): void {
+
+    move(fraction: number = 0) {
+        this.#cancelSuspension();  // not working
+        const state = this.#state;
+        const previousState = {...state};
+        const result: boolean|Promise<boolean>|undefined = this.#animationCallback?.move({...previousState, fraction: fraction});
+        const abort = () => {
+            state.isSuspended = false;
+            state.fraction = previousState.fraction;
+            this.pause();
+        }
+        if (result === false || result === undefined || result === null) {
+            abort();
+            return;
+        }
+        const finalize = () => {
+            state.isSuspended = false;
+            this.#moveInternal(fraction);
+            const type = [PlaybackState.PLAYING, PlaybackState.PLAYING_BACKWARDS].indexOf(state.state) >= 0 ?
+                        "jumpplaying" : "jumppaused";
+            this.#dispatchEvent(type, previousState);
+        }
+        if (PlaybackControls.#isPromise(result)) {
+            state.isSuspended = true;
+            const [promise, ctrl] = PlaybackControls.#abortablePromise(result as Promise<boolean>);
+            this.#suspensionControl = ctrl;
+            promise.then(doContinue => {
+                if (doContinue) {
+                    finalize();
+                } else {
+                    abort();
+                }
+            }).catch(e => {
+                if (!(e instanceof _PlaybackAbortError)) {
+                    abort();
+                }
+            });
+        } else {
+            finalize();
+        }
+    }
+
+     #moveInternal(fraction: number = 0, options?: {skipTimer?: boolean;}): void {
         if (!options?.skipTimer)
             this.#cancelTimer();
         if (fraction < 0)
@@ -304,7 +380,7 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         }
     }
 
-    setAnimationListener(listener: (fraction: number) => void|undefined): void {
+    setAnimationListener(listener: AnimationListener|undefined): void {
         if (this.#state.time) {
             this.#cancelTimer();
             delete this.#state.time;
@@ -356,12 +432,46 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
                 this.stop();
                 return;
             }
-            this.move(fraction, {skipTimer: true});
-            this.#animationCallback!(fraction);
+            const result: boolean|Promise<boolean> = this.#animationCallback!.move({...this.#state, fraction: fraction});
+            if (options?.oneOff) {
+                delete timeInfo.timer;
+            } else if (result === false || result === undefined || result === null) {
+                this.pause();
+            } else {
+                const isPromise = typeof result === "object" && typeof result.then === "function";
+                if (isPromise) {
+                    state.isSuspended = true;
+                    const suspensionStart = globalThis.performance.now();
+                    const [promise, ctrl] = PlaybackControls.#abortablePromise(result as Promise<boolean>);
+                    this.#suspensionControl = ctrl;
+                    promise.then(doContinue => {
+                        if (doContinue) {
+                            state.isSuspended = false;
+                            const elapsed = globalThis.performance.now() - suspensionStart;
+                            start = start! + elapsed;
+                            this.#moveInternal(fraction, {skipTimer: true});
+                            timeInfo.timer = globalThis.requestAnimationFrame(run);
+                        } else {
+                            state.isSuspended = false;
+                            this.pause();
+                        }
+                    }).catch(e => {
+                        if (!(e instanceof _PlaybackAbortError)) {
+                            state.isSuspended = false;
+                            this.pause();
+                        }
+                    });
+                } else {  // returned true
+                    this.#moveInternal(fraction, {skipTimer: true});
+                    timeInfo.timer = globalThis.requestAnimationFrame(run);
+                }
+            }
+            /*
             if (!options?.oneOff)
                 timeInfo.timer = globalThis.requestAnimationFrame(run);
             else
                 delete timeInfo.timer;
+            */
         };
         timeInfo.millisElapsed = 0;
         timeInfo.timer = globalThis.requestAnimationFrame(run);
@@ -376,6 +486,23 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         delete this.#state.time!.millisElapsed;
     }
 
+    #cancelSuspension() {
+        if (this.#state.isSuspended) {
+            this.#suspensionControl?.abort();
+            this.#suspensionControl = undefined;
+            this.#state.isSuspended = false;
+        }
+    }
 
+    static #isPromise(obj: any): boolean {
+        return typeof obj === "object" && typeof obj.then === "function";
+    }
+
+    static #abortablePromise<T>(promise: Promise<T>): [Promise<T>, AbortController] {
+        const ctrl = new AbortController();
+        return [Promise.race([promise, new Promise<T>((_, reject) => ctrl.signal.addEventListener("abort", () => reject(new _PlaybackAbortError())))]), ctrl];
+    }
 
 }
+
+class _PlaybackAbortError extends Error {}

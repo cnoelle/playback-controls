@@ -13,6 +13,7 @@ export interface PlaybackStateInfo {
      * State STOPPED must have fraction 0, state FINISHED must have fraction 1.
      */
     readonly fraction: number;
+    readonly isSuspended: boolean;
 
     isPlaying(): boolean;
 }
