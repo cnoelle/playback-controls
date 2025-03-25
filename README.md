@@ -35,10 +35,10 @@ import { PlaybackControls } from "playback-controls";
 
 PlaybackControls.register();
 const ctrl = document.querySelector("playback-controls");
-ctrl.setAnimationListener((fraction) => {
+ctrl.setAnimationListener({move: (state) => {
     // TODO: show animation state at specified completion fraction
-    console.log("Fraction completed:", fraction);
-});
+    console.log("Fraction completed:", state.fraction);
+}});
 ```
 
 A complete example can be found in https://github.com/cnoelle/playback-controls/blob/main/index.html.
