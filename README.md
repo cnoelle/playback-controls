@@ -5,6 +5,8 @@ A webcomponent that displays playback controls (or media controls) for web anima
 <img src="https://raw.githubusercontent.com/cnoelle/playback-controls/refs/heads/main/screenshot.png" style="width: 168px;">
 
 Demo: https://cnoelle.github.io/playback-controls/
+<br>
+Demo with suspension: https://cnoelle.github.io/playback-controls/index2.html
 
 ## Contents
 
