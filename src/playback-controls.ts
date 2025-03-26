@@ -248,21 +248,58 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         if (!this.#animationCallback)
             return;
         const state = this.#state;
+        const previousState = {...state};
         if (state.isPlaying() && backwards === (state.state === PlaybackState.PLAYING_BACKWARDS))
             return; // unchanged
+        /*
         if ((state.state === PlaybackState.FINISHED && !backwards) ||
                     (state.state === PlaybackState.STOPPED && backwards)) {
             return;  // transition not possible, already at the end
         }
+        */
         this.#cancelSuspension();
         state.state = backwards ? PlaybackState.PLAYING_BACKWARDS : PlaybackState.PLAYING;
         if (backwards && state.fraction === 0)
             state.fraction = 1;
         else if (!backwards && state.fraction === 1)
             state.fraction = 0;
-        this.#started(backwards);
-        if (state.time)
-            this.#startTimer();
+        const finishStart = () => {
+            state.isSuspended = false;
+            this.#started(backwards);
+            if (state.time)
+                this.#startTimer();    
+        };
+        const abort = () => {
+            Object.assign(state, previousState);
+            state.isSuspended = false;
+        }
+        if (this.#animationCallback.start) {
+            const result: boolean|Promise<boolean> = this.#animationCallback.start(state.fraction, backwards);
+            if (result === false || result === undefined || result === null) {
+                abort();
+                return;
+            }
+            if (PlaybackControls.#isPromise(result)) {
+                state.isSuspended = true;
+                const [promise, ctrl] = PlaybackControls.#abortablePromise(result as Promise<boolean>);
+                this.#suspensionControl = ctrl;
+                promise.then(doStart => {
+                    if (doStart) {
+                        finishStart();
+                    } else {
+                        abort();
+                    }
+                }).catch(e => {
+                    if (!(e instanceof _PlaybackAbortError)) {
+                        abort();
+                    }
+                });
+            } else {
+                finishStart();
+            }
+        } else {
+            finishStart();
+        }
     }
     #started(backwards: boolean) {
         const nowInactive = backwards ? this.#playBackward : this.#play;
@@ -366,6 +403,11 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
             } else {
                 state.state = fraction === 1 ? PlaybackState.FINISHED : PlaybackState.PAUSED;
                 PlaybackControls.#updateActivation([this.#play, this.#playBackward, this.#stop], [this.#pause]);
+            }
+            if (this.#animationCallback?.stopped) {
+                try {
+                    this.#animationCallback.stopped({...state});
+                } catch (e) {}
             }
         } else {  // playing
             const isBackwards = state.state === PlaybackState.PLAYING_BACKWARDS;
