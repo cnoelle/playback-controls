@@ -71,7 +71,12 @@
             lastPointIdx = pointIdx;
             return true;
         };
-        ctrl.setAnimationListener({move: callback});
+        const stepListener = (fraction, backwards) => {
+            const newFraction = Math.max(0, Math.min(1, backwards ? fraction - 0.1 : fraction + 0.1));
+            callback({fraction: newFraction});
+            return newFraction;
+        };
+        ctrl.setAnimationListener({move: callback, step: stepListener});
 
     </script>
 </body>

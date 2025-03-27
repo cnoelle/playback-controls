@@ -10,7 +10,11 @@ type MutablePlaybackStateInfo = {-readonly [K in keyof PlaybackStateInfo]: Playb
         {time?: TimeBasedState;};
 
 
+/** If numeric, only the range [0..1] is allowed, everything else leads to unspecified behaviour. */
+export type StepResult = false|number;
+
 export interface AnimationListener {
+
     /**
      * Animation start requested. Return false to indicate that running the animation is currently not possible,
      * or a Promise if this requires some task to be completed first, such as (pre-)loading a resource. 
@@ -30,6 +34,14 @@ export interface AnimationListener {
      * @param state 
      */
     stopped?(state: PlaybackStateInfo): unknown;
+
+    /**
+     * User requests a step forward or backward. Return the resulting fraction, or false if step is not possible.
+     * @param fraction 
+     * @param backwards 
+     */
+    step?(fraction: number, backwards: boolean): StepResult|Promise<StepResult>;
+
 }
 
 /**
@@ -59,11 +71,13 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
     readonly #progress: HTMLProgressElement;
     readonly #clickListener: (evt: Event) => void;
     readonly #progressListener: (evt: MouseEvent) => void;
+    readonly #stepListener: (evt: KeyboardEvent) => void;
+    readonly #enterListener: (evt: KeyboardEvent) => void;
 
     #animationCallback: AnimationListener|undefined;
 
     static get observedAttributes() {
-        return ["animation-duration", "no-titles"]; 
+        return ["animation-duration"]; 
     }
 
     /**
@@ -88,36 +102,43 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
     constructor() {
         super();
         const style: HTMLStyleElement = document.createElement("style");
-        // TODO
-        /*style.textContent = ":host { position: relative; display: block; }";*/
         style.textContent = ".ctrl-container { display: flex; column-gap: 1em; align-items: center; }\n" +
             ".ctrl-btn { font-size: var(--playback-controls-font-size, 2em); " + 
                 "color: var(--playback-controls-color-active, black); }\n" +
             ".ctrl-btn:not([disabled]):hover { cursor: pointer; }\n" +
             ".ctrl-btn[disabled] { color: var(--playback-controls-color-inactive, gray); }\n " +
             ".progress-indicator {margin-left: 1em; width: var(--playback-controls-progress-width, 8em);}";
-        const shadow: ShadowRoot = this.attachShadow({mode: "open"});
+        const shadow: ShadowRoot = this.attachShadow({mode: "open", delegatesFocus: true});
         shadow.appendChild(style);
         const controlsContainer = document.createElement("div");
         controlsContainer.classList.add("ctrl-container");
         const play = document.createElement("div");
         const pause = document.createElement("div");
         const stop = document.createElement("div");
-        [pause, stop].forEach(el => el.setAttribute("disabled", ""))
         const playBackwards = document.createElement("div");
         const ctrlButtons = [play, playBackwards, pause, stop];
         // https://en.wikipedia.org/wiki/Media_control_symbols
         //const ctrlText = ["&#x23F5;", "&#x23F8;", "&#x23F9;", "&#x23F4;"];
         const ctrlText = ["⏵", "⏴", "⏸", "⏹"];
+        const descriptions = ["Play", "Play backwards", "Pause", "Stop"];
+        this.#enterListener = this.#enterPressed.bind(this);
         ctrlButtons.forEach((el, idx) => {
             el.textContent = ctrlText[idx];
             el.classList.add("ctrl-btn");
             controlsContainer.appendChild(el);
+            el.setAttribute("tabindex", "0");
+            el.addEventListener("keydown", this.#enterListener);
+            el.setAttribute("aria-role", "button");
+            const descr = descriptions[idx];
+            el.setAttribute("aria-label", descr);
+            el.title = descr;
         });
         const progress = document.createElement("progress");
         progress.max = 100;
         progress.value = 0;
         progress.classList.add("progress-indicator");
+        progress.setAttribute("tabindex", "0");
+        [pause, stop].forEach(el => PlaybackControls.#deactivate(el));
         controlsContainer.appendChild(progress);
         shadow.appendChild(controlsContainer);
         this.#play = play;
@@ -127,19 +148,58 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         this.#progress = progress;
         this.#clickListener = this.#clicked.bind(this);
         this.#progressListener = this.#progressChanged.bind(this);
-        this.#setTitles();
+        this.#stepListener = this.#step.bind(this);
         controlsContainer.addEventListener("click", this.#clickListener);
         progress.addEventListener("click", this.#progressListener);
+        progress.addEventListener("keydown", this.#stepListener);
+
     }
 
-    #setTitles() {
-        const ctrlTitle = ["Play", "Play backwards", "Pause", "Stop"];
-        [this.#play, this.#playBackward, this.#pause, this.#stop].forEach(
-                (btn, idx) => btn.title = ctrlTitle[idx]);
+    #enterPressed(event: KeyboardEvent) {
+        if (event.key !== "Enter")
+            return;
+        event.preventDefault();
+        if (event.currentTarget === this.#play)
+            this.start();
+        else if (event.currentTarget === this.#playBackward)
+            this.start(true);
+        else if (event.currentTarget === this.#pause)
+            this.pause();
+        else if (event.currentTarget === this.#stop)
+            this.stop();
     }
 
-    #removeTitles() {
-        [this.#play, this.#playBackward, this.#pause, this.#stop].forEach(btn => btn.removeAttribute("title"));
+    #step(event: KeyboardEvent) {
+        const isLeft = event.key === "ArrowLeft";
+        const isRight = !isLeft && event.key === "ArrowRight";
+        if (!isLeft && !isRight)
+            return;
+        event.preventDefault();
+        if (!this.#animationCallback?.step)
+            return;
+        const state = this.#state;
+        this.#cancelSuspension();
+        const doStep = (fraction: number) => this.#moveInternal(fraction);
+        const result: StepResult|Promise<StepResult> = this.#animationCallback.step(state.fraction, isLeft);
+        if (result === false || result === undefined || result === null)
+            return;
+        if (PlaybackControls.#isPromise(result)) {
+            state.isSuspended = true;
+            const [promise, ctrl] = PlaybackControls.#abortablePromise(result as Promise<StepResult>);
+            this.#suspensionControl = ctrl;
+            promise.then((newFraction: StepResult) => {
+                state.isSuspended = false;
+                if (typeof newFraction === "number" && newFraction >= 0 && newFraction <= 1)
+                    doStep(newFraction);
+            }).catch(e => {
+                if (!(e instanceof _PlaybackAbortError)) {
+                    state.isSuspended = false;
+                }
+            });
+        } else {
+            doStep(result as number);
+        }
+
     }
 
     #clicked(event: Event) {
@@ -196,10 +256,14 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
 
     static #deactivate(el: HTMLElement) {
         el.setAttribute("disabled", "");
+        el.setAttribute("aria-disabled", "");
+        el.removeAttribute("tabindex");
     }
 
     static #activate(el: HTMLElement) {
         el.removeAttribute("disabled");
+        el.removeAttribute("aria-disabled");
+        el.setAttribute("tabindex", "0");
     }
 
     get animationDuration(): number {
@@ -210,17 +274,6 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
     set animationDuration(durationMillis: number) {
         if (durationMillis > 0)
             this.setAttribute("animation-duration", durationMillis.toString());
-    } 
-
-    get noTitles(): boolean {
-        return this.getAttribute("no-titles") !== null;
-    }
-
-    set noTitles(noTitles: boolean) {
-        if (noTitles)
-            this.setAttribute("no-titles", "");
-        else
-            this.removeAttribute("no-titles");
     }
 
     async attributeChangedCallback(name: string, oldValue: string|null, newValue: string|null) {
@@ -230,12 +283,6 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
             const millis = parseFloat(newValue!);
             if (millis > 0)
                 this.#setAnimationDuration(millis);
-            break;
-        case "no-titles":
-            if (newValue !== null)
-                this.#removeTitles();
-            else
-                this.#setTitles();
             break;
         }
     }
