@@ -44,6 +44,9 @@ export interface AnimationListener {
 
 }
 
+export type Ticks<T extends string|Date|number> = Array<{fraction: number; tick: T}> |
+        ((fraction: number) => T);
+
 /**
  * The state can be externally controlled, via the method move(fraction: number): void, or the
  * state evolution can be timer based (requestAnimationFrame), calling an externally passed callback
@@ -69,12 +72,15 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
     readonly #stop: HTMLElement;
     readonly #playBackward: HTMLElement;
     readonly #progress: HTMLProgressElement;
+    readonly #ticksParent: HTMLElement;
     readonly #clickListener: (evt: Event) => void;
     readonly #progressListener: (evt: MouseEvent) => void;
     readonly #stepListener: (evt: KeyboardEvent) => void;
     readonly #enterListener: (evt: KeyboardEvent) => void;
 
     #animationCallback: AnimationListener|undefined;
+    #ticks: Ticks<any>|undefined;
+    #numTicks: number|undefined;  // if not set, a reasonable default will be determined
 
     static get observedAttributes() {
         return ["animation-duration"]; 
@@ -107,7 +113,9 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
                 "color: var(--playback-controls-color-active, black); }\n" +
             ".ctrl-btn:not([disabled]):hover { cursor: pointer; }\n" +
             ".ctrl-btn[disabled] { color: var(--playback-controls-color-inactive, gray); }\n " +
-            ".progress-indicator {margin-left: 1em; width: var(--playback-controls-progress-width, 8em);}";
+            ".progress-indicator {margin-left: 1em; width: var(--playback-controls-progress-width, 8em);}\n" +
+            ".progress-container {position: relative;}\n" + 
+            ".ticks-container>* {position: absolute; top: 1em;}";
         const shadow: ShadowRoot = this.attachShadow({mode: "open", delegatesFocus: true});
         shadow.appendChild(style);
         const controlsContainer = document.createElement("div");
@@ -133,13 +141,19 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
             el.setAttribute("aria-label", descr);
             el.title = descr;
         });
+        const progressParent = document.createElement("div");
+        progressParent.classList.add("progress-container");
+        const ticksParent = document.createElement("div");
+        ticksParent.classList.add("ticks-container");
         const progress = document.createElement("progress");
         progress.max = 100;
         progress.value = 0;
         progress.classList.add("progress-indicator");
         progress.setAttribute("tabindex", "0");
         [pause, stop].forEach(el => PlaybackControls.#deactivate(el));
-        controlsContainer.appendChild(progress);
+        controlsContainer.appendChild(progressParent);
+        progressParent.appendChild(progress);
+        progressParent.appendChild(ticksParent);
         shadow.appendChild(controlsContainer);
         this.#play = play;
         this.#pause = pause;
@@ -149,6 +163,7 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         this.#clickListener = this.#clicked.bind(this);
         this.#progressListener = this.#progressChanged.bind(this);
         this.#stepListener = this.#step.bind(this);
+        this.#ticksParent = ticksParent;
         controlsContainer.addEventListener("click", this.#clickListener);
         progress.addEventListener("click", this.#progressListener);
         progress.addEventListener("keydown", this.#stepListener);
@@ -231,7 +246,7 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
 
     #progressChanged(event: MouseEvent) {
         const target = event.currentTarget as HTMLProgressElement;
-        const fraction: number = (event.clientX - target.offsetLeft) / target.clientWidth;
+        const fraction: number = event.offsetX / target.clientWidth;
         target.value = fraction * 100;
         const value: number = target.value;
         if (!isFinite(value) || value < 0 || value > 100)
@@ -463,6 +478,8 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
             PlaybackControls.#updateActivation([active, this.#stop, this.#pause], [inactive]);   
         }
         this.#progress.value = fraction * 100;
+        if (this.#ticks)
+            this.#setTicks(fraction);
         if (state.time && !options?.skipTimer) {
             const oneOff = !state.isPlaying();
             this.#startTimer({oneOff: oneOff});
@@ -583,6 +600,66 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         }
     }
 
+    set ticks(ticks: Ticks<any>|undefined) {
+        this.#ticks = Array.isArray(ticks) ? [...ticks] : ticks; // TODO update view
+        if (ticks)
+            this.#setTicks(this.#state.fraction);
+        else
+            this.#removeTicks();
+    }
+
+    get ticks(): Ticks<any>|undefined {
+        if (Array.isArray(this.#ticks))
+            return [...this.#ticks];
+        return this.#ticks;
+    }
+
+    #setTicks(fraction: number) {
+        this.#removeTicks();
+        const progressWidth = this.#progress.clientWidth;
+        const ticks = this.#ticks;
+        if (!(progressWidth > 0) || !ticks)
+            return;
+        const isFunction = typeof ticks === "function";
+        const first = isFunction ? ticks(0) : ticks[0].toString();
+        const last = isFunction ? ticks(1) : ticks[ticks.length - 1].toString();
+        const dummyCanvas = document.createElement("canvas");
+        const ctx = dummyCanvas.getContext("2d")!;
+        const totalWidth = ctx.measureText(first).width + ctx.measureText(last).width;
+        let numTicks = Math.floor(progressWidth / totalWidth * 2);
+        numTicks = Math.max(2, numTicks);
+        if (this.#numTicks)
+            numTicks = Math.min(this.#numTicks, numTicks);
+        if (!isFunction)
+            numTicks = Math.min(ticks.length, numTicks);
+        this.#drawTicks(numTicks, isFunction, fraction);
+    }
+
+    #drawTicks(numTicks: number, isFunction: boolean, fraction: number) {
+        const frag = document.createDocumentFragment();
+        const elements: Array<HTMLElement> = [];
+        const values: Array<string|number|Date> = [];
+        for (let idx=0; idx<numTicks; idx++) {
+            const tickFraction = idx / (numTicks-1);
+            const tick = isFunction ? (this.#ticks as Function)(tickFraction) : 
+                            (this.#ticks as Array<any>)[Math.round(tickFraction * (this.#ticks!.length-1))].tick;
+            const tickEl = document.createElement("div");
+            elements.push(tickEl);
+            values.push(tick);
+            tickEl.style.left = "calc(var(--playback-controls-progress-width, 8em) * " + tickFraction + ")";
+            frag.appendChild(tickEl);
+        }
+        const valueStrings: Array<string> = PlaybackControls.#format(values);
+        valueStrings.forEach((v, idx) => elements[idx].textContent = v);
+        this.#ticksParent.appendChild(frag);
+    }
+
+    #removeTicks() {
+        const ticksParent = this.#ticksParent;
+        while (ticksParent.firstChild)
+            ticksParent.firstChild.remove();
+    }
+
     static #isPromise(obj: any): boolean {
         return typeof obj === "object" && typeof obj.then === "function";
     }
@@ -591,6 +668,23 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         const ctrl = new AbortController();
         return [Promise.race([promise, new Promise<T>((_, reject) => ctrl.signal.addEventListener("abort", () => reject(new _PlaybackAbortError())))]), ctrl];
     }
+
+    static #format<T extends number|string|Date>(values: Array<T>): Array<string> {
+        const l = values.length;
+        if (l === 0)
+            return []
+        if (l === 1 || typeof values[0] === "string")
+            return values.map(v => v.toString());
+        if (values[0] instanceof Date) {
+            // TODO handle case of intra-day variation
+            return (values as Array<Date>).map(d => d.getFullYear() + "-" + (d.getMonth()+1) + "-" + d.getDate()); 
+        }
+         // TODO better number formatting
+        return values.map(v => v.toString());
+
+    }
+
+
 
 }
 
