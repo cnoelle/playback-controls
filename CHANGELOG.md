@@ -1,5 +1,9 @@
 # Changelog
 
+# v0.0.5
+
+* Option to add ticks to progress indicator
+
 # v0.0.4
 
 * Keyboard control added
