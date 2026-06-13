@@ -3,7 +3,7 @@ import { PlaybackState, PlaybackStateInfo, PlaybackStateMachine, PlaybackTransit
 
 type TimeBasedState = {
     millisElapsed?: number;
-    timer?: number;
+    //timer?: number;
     durationMillis: number;
 }
 type MutablePlaybackStateInfo = {-readonly [K in keyof PlaybackStateInfo]: PlaybackStateInfo[K]}&
@@ -47,6 +47,50 @@ export interface AnimationListener {
 export type Ticks<T extends string|Date|number> = Array<{fraction: number; tick: T}> |
         ((fraction: number) => T);
 
+
+export interface FrameControl {
+    start: (func: (timestamp: number) => void) => void;
+    continue: () => void;
+    done: () => void;
+    cancel: () => void;
+}
+
+class DefaultFrameControl implements FrameControl {
+
+    #func?: ((timestamp: number) => void);
+    #timer?: number;
+
+    start(func: (timestamp: number) => void) {
+        this.#func = func;
+        this.#timer = globalThis.requestAnimationFrame(func);
+    }
+
+    continue() {
+        if (this.#func)
+            this.#timer = globalThis.requestAnimationFrame(this.#func);
+    }
+
+    cancel() {
+        if (this.#timer)
+            globalThis.cancelAnimationFrame(this.#timer);
+        this.#func = undefined;
+        this.#timer = undefined;
+    }
+
+    done() {
+        this.#func = undefined;
+        this.#timer = undefined;
+    }
+
+}
+
+/*
+export interface FrameControl {
+    requestAnimationFrame: (func: (timestamp: number) => void) => number;
+    cancelAnimationFrame: (timer: number) => void;
+}
+*/
+
 /**
  * The state can be externally controlled, via the method move(fraction: number): void, or the
  * state evolution can be timer based (requestAnimationFrame), calling an externally passed callback
@@ -67,6 +111,7 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
 
     };
     #suspensionControl: AbortController|undefined;
+    #frameControl: FrameControl = new DefaultFrameControl();
     readonly #play: HTMLElement;
     readonly #pause: HTMLElement;
     readonly #stop: HTMLElement;
@@ -373,6 +418,7 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         state.state = PlaybackState.STOPPED;
         this.#cancelSuspension();
         this.#moveInternal(0);
+        // FIXME isn't this part of moveInternal(0) anyway?
         if (this.#animationCallback?.stopped)
             this.#animationCallback.stopped({...state});
     }
@@ -533,16 +579,19 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
                     Math.min(1, passed / timeInfo.durationMillis + initialFraction);
             if (fraction === 1 && !backwards) {
                 this.finish();
+                this.#frameControl.done();
                 return;
             } else if (fraction === 0 && backwards) {
                 this.stop();
+                this.#frameControl.done();
                 return;
             }
             const result: boolean|Promise<boolean> = this.#animationCallback!.move({...this.#state, fraction: fraction});
             if (options?.oneOff) {
-                delete timeInfo.timer;
+                //delete timeInfo.timer;
             } else if (result === false || result === undefined || result === null) {
                 this.pause();
+                this.#frameControl.done();
             } else {
                 const isPromise = typeof result === "object" && typeof result.then === "function";
                 if (isPromise) {
@@ -556,39 +605,45 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
                             const elapsed = globalThis.performance.now() - suspensionStart;
                             start = start! + elapsed;
                             this.#moveInternal(fraction, {skipTimer: true});
-                            timeInfo.timer = globalThis.requestAnimationFrame(run);
+                            //timeInfo.timer = this.#frameControl.requestAnimationFrame(run);
+                            this.#frameControl.continue();
                         } else {
                             state.isSuspended = false;
                             this.pause();
+                            this.#frameControl.done();
                         }
                     }).catch(e => {
                         if (!(e instanceof _PlaybackAbortError)) {
                             state.isSuspended = false;
                             this.pause();
+                            this.#frameControl.done();
                         }
                     });
                 } else {  // returned true
                     this.#moveInternal(fraction, {skipTimer: true});
-                    timeInfo.timer = globalThis.requestAnimationFrame(run);
+                    //timeInfo.timer = this.#frameControl.requestAnimationFrame(run);
+                    this.#frameControl.continue();
                 }
             }
             /*
             if (!options?.oneOff)
-                timeInfo.timer = globalThis.requestAnimationFrame(run);
+                timeInfo.timer = this.#frameControl.requestAnimationFrame(run);
             else
                 delete timeInfo.timer;
             */
         };
         timeInfo.millisElapsed = 0;
-        timeInfo.timer = globalThis.requestAnimationFrame(run);
+        //timeInfo.timer = this.#frameControl.requestAnimationFrame(run);
+        this.#frameControl.start(run);
     }
 
     #cancelTimer() {
-        const timer = this.#state.time?.timer;
-        if (timer === undefined)
-            return;
-        globalThis.cancelAnimationFrame(timer);
-        delete this.#state.time!.timer;
+        //const timer = this.#state.time?.timer;
+        //if (timer === undefined)
+        //    return;
+        //this.#frameControl.cancelAnimationFrame(timer);
+        this.#frameControl.cancel();
+        //delete this.#state.time!.timer;
         delete this.#state.time!.millisElapsed;
     }
 
@@ -612,6 +667,12 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         if (Array.isArray(this.#ticks))
             return [...this.#ticks];
         return this.#ticks;
+    }
+
+    setFrameControl(frameControl?: FrameControl) {
+        if (this.#state.isPlaying())
+            this.pause();
+        this.#frameControl = frameControl || new DefaultFrameControl();
     }
 
     #setTicks(fraction: number) {
