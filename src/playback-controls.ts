@@ -502,6 +502,7 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
             throw new Error("Invalid fraction: " + fraction);
         const state = this.#state;
         state.fraction = fraction;
+        let startTimer: boolean = true;
         if ([PlaybackState.PAUSED, PlaybackState.STOPPED, PlaybackState.FINISHED].indexOf(state.state) >= 0
                     || (fraction === 0 && state.state === PlaybackState.PLAYING_BACKWARDS)
                     || (fraction === 1 && state.state === PlaybackState.PLAYING)) {
@@ -517,6 +518,7 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
                     this.#animationCallback.stopped({...state});
                 } catch (e) {}
             }
+            startTimer = false;
         } else {  // playing
             const isBackwards = state.state === PlaybackState.PLAYING_BACKWARDS;
             const active = isBackwards ? this.#play : this.#playBackward;
@@ -526,7 +528,7 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         this.#progress.value = fraction * 100;
         if (this.#ticks)
             this.#setTicks(fraction);
-        if (state.time && !options?.skipTimer) {
+        if (startTimer && state.time && !options?.skipTimer) {
             const oneOff = !state.isPlaying();
             this.#startTimer({oneOff: oneOff});
         }
