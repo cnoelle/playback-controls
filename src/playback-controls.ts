@@ -235,6 +235,8 @@ export class PlaybackControls extends HTMLElement implements PlaybackStateMachin
         if (!isLeft && !isRight)
             return;
         event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
         if (!this.#animationCallback?.step)
             return;
         const state = this.#state;
